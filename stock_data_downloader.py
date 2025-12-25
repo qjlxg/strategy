@@ -1,76 +1,82 @@
 import os
-import akshare as ak
 import pandas as pd
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
-# 创建保存目录
 DATA_DIR = "stock_data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
-
-RAW_LIST_PATH = os.path.join(DATA_DIR, "raw_stock_list.csv")
 FILTERED_LIST_PATH = os.path.join(DATA_DIR, "filtered_stock_list.csv")
 
-def get_and_filter_stocks():
-    """获取实时数据、保存原始名单、执行过滤并保存清理后的名单"""
-    print("正在从 akshare 获取 A 股实时名单...")
-    # 获取全量 A 股实时行情数据
-    df = ak.stock_zh_a_spot_em()
-    
-    # 保存原始名单
-    df.to_csv(RAW_LIST_PATH, index=False, encoding='utf-8-sig')
-    print(f"原始名单已保存至: {RAW_LIST_PATH}")
+# --- 调试开关 ---
+DEBUG_LIMIT = 100  # 调试完成后请改为 None 或一个巨大的数字
 
-    # --- 执行过滤逻辑 ---
-    # 1. 排除 ST (通过名称中是否包含 ST 判断)
-    df = df[~df['名称'].str.contains("ST", na=False)]
-    
-    # 2. 排除 30 开头 (创业板)
-    df = df[~df['代码'].str.startswith("30")]
-    
-    # 3. 价格过滤: 5.0 <= 最新价 <= 20.0
-    # 注意：akshare 返回的列名通常包含 '最新价'
-    df = df[(df['最新价'] >= 5.0) & (df['最新价'] <= 20.0)]
-    
-    # 4. 转换代码格式以适配 yfinance (6开头为.SS, 其他如00开头为.SZ)
-    def format_code(c):
-        return f"{c}.SS" if c.startswith('6') else f"{c}.SZ"
-    
-    df['yf_code'] = df['代码'].apply(format_code)
-    
-    # 保存清理后的精简名单
-    df.to_csv(FILTERED_LIST_PATH, index=False, encoding='utf-8-sig')
-    print(f"清理完成，符合条件股票共 {len(df)} 只。精简名单已保存。")
-    return df['yf_code'].tolist()
-
-def download_data(symbol):
-    """并行下载的具体任务"""
+def download_item(symbol):
+    file_path = os.path.join(DATA_DIR, f"{symbol}.csv")
     try:
         ticker = yf.Ticker(symbol)
-        data = ticker.history(period="1d")
-        if not data.empty:
-            data.to_csv(os.path.join(DATA_DIR, f"{symbol}.csv"))
-            return True
-    except:
-        pass
-    return False
+        
+        # 增量更新逻辑
+        if os.path.exists(file_path):
+            # 读取已有数据的最后日期
+            existing_df = pd.read_csv(file_path)
+            if not existing_df.empty:
+                # 假设第一列是 Date
+                last_date_str = existing_df.iloc[-1]['Date']
+                # 解析日期并加 1 天作为起始点
+                last_date = pd.to_datetime(last_date_str).date()
+                start_date = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
+                
+                # 如果最后日期就是今天，则跳过
+                if last_date >= datetime.now().date():
+                    return True
+                
+                # 下载从最后日期之后的数据
+                new_data = ticker.history(start=start_date)
+                if not new_data.empty:
+                    # 将 Index (Date) 转换为列以匹配 CSV 格式
+                    new_data.reset_index(inplace=True)
+                    # 确保日期列格式一致
+                    new_data['Date'] = new_data['Date'].dt.strftime('%Y-%m-%d')
+                    # 追加保存 (不写表头)
+                    new_data.to_csv(file_path, mode='a', index=False, header=False)
+                    print(f"增量更新成功: {symbol}")
+            else:
+                # 文件为空则重新下载全量
+                data = ticker.history(period="max")
+                data.reset_index().to_csv(file_path, index=False)
+        else:
+            # 第一次下载，获取全量历史数据
+            data = ticker.history(period="max")
+            if not data.empty:
+                data.reset_index(inplace=True)
+                data['Date'] = data['Date'].dt.strftime('%Y-%m-%d')
+                data.to_csv(file_path, index=False)
+                print(f"全量下载成功: {symbol}")
+        return True
+    except Exception as e:
+        print(f"处理 {symbol} 失败: {e}")
+        return False
 
 def main():
-    # 二次运行检查：如果精简名单已存在，直接读取
-    if os.path.exists(FILTERED_LIST_PATH):
-        print("检测到已存在的精简名单，直接加载进行下载...")
-        df_filtered = pd.read_csv(FILTERED_LIST_PATH)
-        symbols = df_filtered['yf_code'].tolist()
-    else:
-        # 第一次运行，执行获取和过滤
-        symbols = get_and_filter_stocks()
+    if not os.path.exists(FILTERED_LIST_PATH):
+        print(f"错误: 找不到名单文件 {FILTERED_LIST_PATH}")
+        return
 
-    print(f"开始并行下载数据 (共 {len(symbols)} 只)...")
-    # 使用 10 个线程并行下载
+    df = pd.read_csv(FILTERED_LIST_PATH)
+    symbols = df['yf_code'].tolist()
+    
+    # 调试限制
+    if DEBUG_LIMIT:
+        print(f"⚠️ 调试模式: 仅处理前 {DEBUG_LIMIT} 只股票")
+        symbols = symbols[:DEBUG_LIMIT]
+
+    print(f"开始执行下载/更新任务，目标数量: {len(symbols)}...")
+    
+    # 使用线程池并行下载
     with ThreadPoolExecutor(max_workers=10) as executor:
-        executor.map(download_data, symbols)
-    print("所有任务执行完毕。")
+        executor.map(download_item, symbols)
+    
+    print("任务执行完毕。")
 
 if __name__ == "__main__":
     main()
