@@ -1,0 +1,43 @@
+name: stock_filter
+
+on:
+  # 当脚本或工作流本身变动时自动运行
+  push:
+    paths:
+      - 'stock_filter.py'
+      - '.github/workflows/stock_filter.yml'
+  
+  # 每天北京时间 15:13 运行 (UTC 07:13)
+  schedule:
+    - cron: '13 7 * * *'
+
+  # 支持在 Actions 界面手动点击运行
+  workflow_dispatch:
+
+jobs:
+  run-stock-task:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 安装必要库
+        run: |
+          pip install akshare yfinance pandas
+
+      - name: 执行脚本
+        env:
+          TZ: 'Asia/Shanghai' # 强制上海时区
+        run: |
+          python stock_filter.py
+
+      - name: 运行结果预览
+        run: |
+          echo "检查下载目录:"
+          ls -l stock_data/ | head -n 15
