@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install yfinance pandas
+        run: pip install akshare pandas
       - name: Run Downloader
         run: python stock_data_downloader.py
 
