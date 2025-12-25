@@ -7,7 +7,7 @@ from datetime import datetime
 
 DATA_DIR = "stock_data"
 FILTERED_LIST_PATH = os.path.join(DATA_DIR, "filtered_stock_list.csv")
-DEBUG_LIMIT = 100 # 调试完成后请改为 None
+DEBUG_LIMIT = None # 调试完成后请改为 None
 
 # 目标列名映射 (akshare 返回的列名 -> 你的目标列名)
 COLUMN_MAPPING = {
