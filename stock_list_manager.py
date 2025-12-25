@@ -10,7 +10,7 @@ RAW_LIST_PATH = os.path.join(DATA_DIR, "raw_stock_list.csv")
 FILTERED_LIST_PATH = os.path.join(DATA_DIR, "filtered_stock_list.csv")
 
 def main():
-    print("正在获取 A 股实时名单...")
+    print("正在获取实时名单...")
     # 获取全量行情
     df = ak.stock_zh_a_spot_em()
     df.to_csv(RAW_LIST_PATH, index=False, encoding='utf-8-sig')
