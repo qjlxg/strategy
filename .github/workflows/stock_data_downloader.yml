@@ -4,32 +4,43 @@ on:
   push:
     paths:
       - 'stock_data_downloader.py'
-      - '.github/workflows/stock_data_downloader.yml'
   schedule:
-    - cron: '13 7 * * *' # 每天北京时间 15:13 运行
+    - cron: '13 7 * * *' # 北京时间 15:13
   workflow_dispatch:
 
 jobs:
   download-data:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v3
-        with:
-          # This is important for pushing changes back to the repo
-          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+
       - name: Install dependencies
         run: pip install akshare pandas
-      - name: Run Downloader
-        run: python stock_data_downloader.py
+
+      - name: Run Downloader with Auto-Retry
+        run: |
+          # 设定最多循环尝试次数，确保任务最终完成
+          ATTEMPTS=0
+          MAX_ATTEMPTS=20 
+          until [ $ATTEMPTS -ge $MAX_ATTEMPTS ]
+          do
+            python stock_data_downloader.py && break
+            ATTEMPTS=$[$ATTEMPTS+1]
+            echo "发生错误，10秒后从断点尝试第 $ATTEMPTS 次重试..."
+            sleep 10
+          done
 
       - name: Git Auto Commit
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "feat(stock): update daily stock data from stock_data_downloader.py"
-          # Only commit if there are changes in stock_data directory
-          file_pattern: 'stock_data/*.csv'
-          branch: ${{ github.ref_name }} # Push to the current branch
+          commit_message: "feat(stock): daily update [skip ci]"
+          # 关键：提交数据和进度文件
+          file_pattern: 'stock_data/*.csv stock_data/checkpoint.txt'
