@@ -1,4 +1,4 @@
-name: 🔄 极致低吸精选筛选
+name: 🔄 低选
 
 on:
   workflow_dispatch:
