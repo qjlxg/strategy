@@ -15,7 +15,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # 必须获取完整历史以支持 rebase
+          fetch-depth: 0 
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -36,9 +36,12 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add results/backtest_advanced_summary.csv
           
-          # 关键点：先拉取远程更新并变基，解决推送冲突
+          # 处理冲突：先暂存本地回测结果，拉取远程，再恢复并提交
+          git add results/*.csv
+          git stash
           git pull --rebase origin main
+          git stash pop || echo "No stash to pop"
           
-          git diff --quiet && git diff --staged --quiet || (git commit -m "📊 自动更新回测报告 [$(date '+%Y-%m-%d %H:%M')]" && git push origin main)
+          git add results/*.csv
+          git diff --quiet && git diff --staged --quiet || (git commit -m "📈 优化版回测报告推送 [$(date '+%Y-%m-%d %H:%M')]" && git push origin main)
