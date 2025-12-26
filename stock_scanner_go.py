@@ -8,23 +8,23 @@ import numpy as np
 
 # ==================== 2025“防假突破”极致精选参数 ===================
 MIN_PRICE = 5.0              
-MAX_AVG_TURNOVER_30 = 2.0    # 强化：只要筹码稳定的标的
+MAX_AVG_TURNOVER_30 = 2.0    # 换手率更低，只要筹码锁定的票
 
-# --- 选股逻辑优化：避开僵尸股，允许微幅放量确认 ---
-MIN_VOLUME_RATIO = 0.5       # 避开完全无买盘的僵尸股
-MAX_VOLUME_RATIO = 1.2       # 允许小幅放量确认止跌
-RSI6_MAX = 28                # 严谨超跌区
-KDJ_K_MAX = 25               # 底部磨底确认
+# --- 选股逻辑优化：避开僵尸股，转向温和放量确认 ---
+MIN_VOLUME_RATIO = 0.5       # 避开量比过小的死票
+MAX_VOLUME_RATIO = 1.2       # 允许小幅放量确认（0.5-1.2是最健康的止跌放量区间）
+
+# --- 极度超跌 + 乖离过滤 ---
+RSI6_MAX = 28                
+KDJ_K_MAX = 25               
 MIN_PROFIT_POTENTIAL = 18    # 空间要求
 
-# --- 核心：确认信号强度 ---
-# 股价必须高于 5 日线 0.5%，且成交量必须大于昨天（量增价涨）
-STAND_STILL_THRESHOLD = 1.005 
-# 20日乖离率控制：锁定“弹簧压到极致”的区域
-MIN_BIAS_20 = -18
-MAX_BIAS_20 = -8
+# --- 核心：防假突破确认信号 ---
+STAND_STILL_THRESHOLD = 1.005 # 必须站上5日线0.5%
+MIN_BIAS_20 = -18            # 乖离率下限（防止加速赶底）
+MAX_BIAS_20 = -8             # 乖离率上限（确保弹簧压得够紧）
 
-MAX_TODAY_CHANGE = 4.0       # 允许适当涨幅以确认站上均线，但拒绝大阳线追高
+MAX_TODAY_CHANGE = 4.0       # 允许适度涨幅以确认站稳
 # =====================================================================
 
 SHANGHAI_TZ = pytz.timezone('Asia/Shanghai')
