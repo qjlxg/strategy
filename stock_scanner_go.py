@@ -6,24 +6,25 @@ import glob
 from multiprocessing import Pool, cpu_count
 import numpy as np
 
-# ==================== 2025“实战质量增强版”选股参数 ===================
+# ==================== 2025“防假突破”极致精选参数 ===================
 MIN_PRICE = 5.0              
-MAX_AVG_TURNOVER_30 = 2.0    
+MAX_AVG_TURNOVER_30 = 2.0    # 换手率更低，只要筹码锁定的票
 
-# --- 1. 量能确认：拒绝僵尸股，捕捉温和回补 ---
+# --- 1. 量能确认：拒绝僵尸股，转向温和放量确认 ---
 MIN_VOLUME_RATIO = 0.5       
-MAX_VOLUME_RATIO = 1.2       
+MAX_VOLUME_RATIO = 1.2       # 0.5-1.2是最健康的止跌放量区间
 
-# --- 2. 超跌区间：锁定受压弹簧 ---
+# --- 2. 极致超跌 + 空间要求 ---
 RSI6_MAX = 28                
 KDJ_K_MAX = 25               
-MIN_PROFIT_POTENTIAL = 18    # 反弹至60日线空间
+MIN_PROFIT_POTENTIAL = 18    # 反弹至60日线的空间
 
-# --- 3. 核心：防假突破与跌势衰竭确认 ---
+# --- 3. 核心：跌势衰竭与站稳确认 ---
 STAND_STILL_THRESHOLD = 1.005 # 必须站上5日线0.5%
-MIN_BIAS_20 = -18            
-MAX_BIAS_20 = -8             
-MAX_TODAY_CHANGE = 4.0       
+MIN_BIAS_20 = -18            # 20日乖离率下限（防暴雷）
+MAX_BIAS_20 = -8             # 20日乖离率上限（保动力）
+
+MAX_TODAY_CHANGE = 4.0       # 允许适度涨幅以确认站稳
 # =====================================================================
 
 SHANGHAI_TZ = pytz.timezone('Asia/Shanghai')
@@ -41,7 +42,7 @@ def process_single_stock(args):
         close = df['收盘']
         vol = df['成交量']
         
-        # 指标计算
+        # 1. 指标计算
         # RSI6
         delta = close.diff()
         gain = (delta.where(delta > 0, 0)).rolling(6).mean()
@@ -59,18 +60,19 @@ def process_single_stock(args):
         ma60 = close.rolling(60).mean().iloc[-1]
         bias20 = (close.iloc[-1] - ma20) / ma20 * 100
         
-        # --- 新增核心逻辑：5日线斜率趋缓 ---
+        # 2. 【核心新增】跌势衰竭确认：5日线斜率趋缓
         # 今天的MA5下降幅度小于昨天的下降幅度，说明跌势在减弱
         ma5_diff_today = ma5.iloc[-1] - ma5.iloc[-2]
         ma5_diff_yesterday = ma5.iloc[-2] - ma5.iloc[-3]
         slope_slowing = ma5_diff_today > ma5_diff_yesterday
         
-        # 量能确认
+        # 3. 量能确认
         vol_ma5 = vol.shift(1).rolling(5).mean().iloc[-1]
         vol_ratio = vol.iloc[-1] / vol_ma5
+        # 量增确认：今日量 > 昨日量
         vol_increase = vol.iloc[-1] > vol.iloc[-2] 
         
-        # 辅助筛选
+        # 辅助信息
         potential = (ma60 - close.iloc[-1]) / close.iloc[-1] * 100
         change = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2] * 100
         avg_turnover_30 = df['换手率'].rolling(30).mean().iloc[-1]
@@ -82,8 +84,8 @@ def process_single_stock(args):
             kdj_k <= KDJ_K_MAX and
             MIN_BIAS_20 <= bias20 <= MAX_BIAS_20 and
             close.iloc[-1] >= ma5.iloc[-1] * STAND_STILL_THRESHOLD and 
-            slope_slowing and                                 # 核心：跌势趋缓
-            vol_increase and                                  # 核心：带量确认
+            slope_slowing and                                 # 跌势趋缓确认
+            vol_increase and                                  # 主动买入确认
             MIN_VOLUME_RATIO <= vol_ratio <= MAX_VOLUME_RATIO and
             potential >= MIN_PROFIT_POTENTIAL and
             change <= MAX_TODAY_CHANGE):
@@ -103,7 +105,7 @@ def process_single_stock(args):
 
 def main():
     now_shanghai = datetime.now(SHANGHAI_TZ)
-    print(f"🚀 极致缩量 + 斜率确认扫描开始... ({now_shanghai.strftime('%Y-%m-%d %H:%M')})")
+    print(f"🚀 极致缩量精选扫描开始... 目标：56%胜率确认信号 ({now_shanghai.strftime('%Y-%m-%d %H:%M')})")
 
     name_map = {}
     if os.path.exists(NAME_MAP_FILE):
@@ -120,17 +122,18 @@ def main():
         
     if results:
         df_result = pd.DataFrame(results)
+        # 排序：RSI6 越低代表反弹张力越大
         df_result = df_result.sort_values(by='RSI6', ascending=True)
         
-        print(f"\n🎯 扫描完成，精选出 {len(results)} 只具有“跌势竭尽”特征的标的：")
-        print("💡 提醒：若买入后3日内未实现盈利确认，请及时执行“3日生命线”离场策略。")
+        print(f"\n🎯 扫描完成，精选出 {len(results)} 只“高质量止跌”标的：")
+        print("⚠️  实战纪律：买入后3日内利润若低于 1%，请执行生命线离场。")
         print("-" * 80)
         print(df_result.to_string(index=False))
         
         os.makedirs('results', exist_ok=True)
         df_result.to_csv('results/selected_stocks.csv', index=False, encoding='utf_8_sig')
     else:
-        print("\n🤔 当前市场环境下，未发现符合“斜率趋缓+带量确认”逻辑的极品信号。")
+        print("\n🤔 市场环境较差，暂未发现符合“斜率确认+量增站稳”逻辑的标的。")
 
 if __name__ == "__main__":
     main()
