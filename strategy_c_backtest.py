@@ -15,20 +15,24 @@ STOP_LOSS_PCT = -5.0
 def calculate_indicators(df):
     close = df['Close']
     df['MA5'] = close.rolling(5).mean()
+    df['MA10'] = close.rolling(10).mean() # 新增：用于多头排列校验
     df['MA20'] = close.rolling(20).mean()
     df['MA5V'] = df['Volume'].rolling(5).mean()
     df['MA3V'] = df['Volume'].rolling(3).mean()
+    
     # RSI6
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(6).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(6).mean()
     df['RSI6'] = 100 - (100 / (1 + gain/loss))
+    
     # KDJ
     low_9 = df['Low'].rolling(9).min()
     high_9 = df['High'].rolling(9).max()
     rsv = (close - low_9) / (high_9 - low_9) * 100
     df['K'] = rsv.ewm(com=2).mean()
     df['D'] = df['K'].ewm(com=2).mean()
+    
     # MACD
     exp1 = close.ewm(span=12, adjust=False).mean()
     exp2 = close.ewm(span=26, adjust=False).mean()
@@ -36,7 +40,6 @@ def calculate_indicators(df):
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
     df['MACD_HIST'] = (df['DIF'] - df['DEA']) * 2
     df['DIF_MA60'] = df['DIF'].rolling(60).mean()
-    df['OBV'] = (np.sign(close.diff()) * df['Volume']).fillna(0).cumsum()
     return df
 
 def run_backtest_on_file(file_path):
@@ -58,28 +61,24 @@ def run_backtest_on_file(file_path):
             curr = df.iloc[i]
             prev = df.iloc[i-1]
             
-            # --- C策略核心逻辑 + V4 买点强化 ---
-            ma5_slope = np.polyfit(np.arange(5), df['MA5'].iloc[i-4:i+1].values, 1)[0]
-            is_trend = (ma5_slope > 0) and (curr['Close'] > curr['MA20'])
+            # --- V5 强化版核心逻辑 ---
+            # 1. 趋势强化：增加 MA5 > MA10
+            is_trend = (curr['MA5'] > curr['MA10'] > curr['MA20'])
             
+            # 2. 突破确认：阳线突破前高
             prev_high_40 = df['High'].iloc[i-40:i].max()
-            # 突破过滤：要求收盘价真突破，且当日为阳线
             is_breakout = (curr['Close'] > prev_high_40 * 1.01) and (curr['Close'] > curr['Open'])
             
-            # 量能过滤：温和放量，避免过度透支
-            is_vol = (2.0 * curr['MA5V'] < curr['Volume'] < 4.5 * curr['MA5V']) and (curr['MA3V'] >= curr['MA5V'])
+            # 3. 量能确认：成交量适度爆发
+            is_vol = (2.0 * curr['MA5V'] < curr['Volume'] < 4.5 * curr['MA5V'])
             
-            # RSI过滤：处于强势区间但未见顶
-            is_rsi = (65 < curr['RSI6'] < 82) and (curr['RSI6'] > prev['RSI6'])
-            
-            is_kdj = (curr['K'] > curr['D']) and (prev['K'] <= prev['D']) and (curr['K'] < 70)
-            
-            # MACD过滤：红柱加速增长 (斜率要求)
-            is_macd = (curr['DIF'] > curr['DEA']) and (curr['DIF'] > -0.05) and \
-                      (curr['DIF'] > curr['DIF_MA60']) and (curr['MACD_HIST'] > prev['MACD_HIST'] * 1.2)
+            # 4. 指标共振：RSI处于攻击位，MACD红柱加速增长
+            is_rsi = (65 < curr['RSI6'] < 82)
+            is_kdj = (curr['K'] > curr['D']) and (prev['K'] <= prev['D'])
+            is_macd = (curr['DIF'] > curr['DEA']) and (curr['MACD_HIST'] > prev['MACD_HIST'] * 1.1)
 
             if is_trend and is_breakout and is_vol and is_rsi and is_kdj and is_macd:
-                # 入场买点过滤：剔除极端高开
+                # 买点过滤
                 next_day = df.iloc[i+1]
                 open_jump = ((next_day['Open'] - curr['Close']) / curr['Close']) * 100
                 if not (-1.0 < open_jump < 4.5): continue 
@@ -93,10 +92,11 @@ def run_backtest_on_file(file_path):
                 is_stopped = False
                 
                 for _, row in post_df.iterrows():
+                    # 计算持仓期间最高涨幅
                     day_high_reach = ((row['High'] - triggered_price) / triggered_price) * 100
                     max_reach = max(max_reach, day_high_reach)
                     
-                    # 5% 硬止损
+                    # 检查 5% 强制止损
                     day_low_ret = ((row['Low'] - triggered_price) / triggered_price) * 100
                     if day_low_ret <= STOP_LOSS_PCT:
                         final_ret = STOP_LOSS_PCT
@@ -125,34 +125,29 @@ def main():
     
     flattened = [item for sublist in all_results if sublist for item in sublist]
     if not flattened:
-        print("V4 优化后回测期间未发现信号。")
+        print("未发现信号。")
         return
 
     res_df = pd.DataFrame(flattened)
     res_df['名称'] = res_df['代码'].apply(lambda x: names_dict.get(x, "未知"))
     
-    # --- 统计输出 ---
-    total_signals = len(res_df)
-    win_count = len(res_df[res_df['持有10日收益%'] > 0])
-    win_rate = (win_count / total_signals) * 100
-    avg_max_reach = res_df['最高冲击%'].mean()
-    avg_final_ret = res_df['持有10日收益%'].mean()
+    # --- 新增：统计计算 ---
+    total = len(res_df)
+    wins = len(res_df[res_df['持有10日收益%'] > 0])
+    win_rate = (wins / total) * 100 if total > 0 else 0
+    avg_ret = res_df['持有10日收益%'].mean()
     
     now = datetime.now()
-    dir_name = "backtest_reports/" + now.strftime("%Y-%m")
-    os.makedirs(dir_name, exist_ok=True)
-    save_path = os.path.join(dir_name, f"C_Strategy_V4_{now.strftime('%Y%m%d_%H%M')}.csv")
+    save_path = f"C_Strategy_V5_Final_{now.strftime('%Y%m%d_%H%M')}.csv"
     res_df.to_csv(save_path, index=False, encoding='utf-8-sig')
     
-    print("\n" + "="*40)
-    print(f"🚀 C策略 V4 深度优化回测报告")
-    print("-" * 40)
-    print(f"📂 信号总数: {total_signals}")
-    print(f"📈 策略胜率: {win_rate:.2f}% (收益为正)")
-    print(f"🔥 最高平均冲击: {avg_max_reach:.2f}%")
-    print(f"💰 10日平均净收益: {avg_final_ret:.2f}%")
-    print(f"💾 结果已保存至: {save_path}")
-    print("="*40 + "\n")
+    print("\n" + "="*30)
+    print(f"📊 策略 V5 最终版回测报告")
+    print(f"信号总数: {total}")
+    print(f"平均胜率: {win_rate:.2f}%")
+    print(f"平均净收益: {avg_ret:.2f}%")
+    print(f"报告已生成: {save_path}")
+    print("="*30 + "\n")
 
 if __name__ == "__main__":
     main()
