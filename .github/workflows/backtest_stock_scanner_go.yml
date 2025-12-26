@@ -6,42 +6,40 @@ on:
     paths:
       - 'stock_scanner_go.py'
       - 'backtest_stock_scanner_go.py'
-      - '.github/workflows/backtest_stock_scanner_go.yml'
 
 jobs:
   run-backtest:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: Install Dependencies
-        run: pip install pandas numpy pytz
-
-      - name: Run Backtest
+      - name: Run
         env:
           TZ: 'Asia/Shanghai'
         run: |
+          pip install pandas numpy pytz
           mkdir -p results
           python backtest_stock_scanner_go.py
 
-      - name: Commit and Push Results
+      - name: Force Sync and Push
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          
-          # 处理冲突：先暂存本地回测结果，拉取远程，再恢复并提交
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
           git add results/*.csv
-          git stash
-          git pull --rebase origin main
-          git stash pop || echo "No stash to pop"
           
+          # 放弃本地不重要的变动，强制以远程为准再合并
+          git fetch origin main
+          git reset --mixed origin/main
           git add results/*.csv
-          git diff --quiet && git diff --staged --quiet || (git commit -m "📈 优化版回测报告推送 [$(date '+%Y-%m-%d %H:%M')]" && git push origin main)
+          
+          git diff --quiet && git diff --staged --quiet || (git commit -m "📊 质量增强版回测报告" && git push origin main)
