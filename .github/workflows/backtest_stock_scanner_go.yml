@@ -18,7 +18,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: pip install pandas numpy pytz
@@ -28,7 +28,7 @@ jobs:
           TZ: 'Asia/Shanghai' # 强制上海时区
         run: |
           mkdir -p results
-          python stock_scanner_go.py
+         
           python backtest_stock_scanner_go.py
 
       - name: Push Results to Repository
