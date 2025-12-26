@@ -2,21 +2,24 @@ name: Strategy C Sniper Workflow
 
 on:
   schedule:
-    - cron: '0 15 * * *' # 北京时间 23:00
+    # 北京时间每天 23:00 自动运行 (15:00 UTC)
+    - cron: '0 15 * * *'
   push:
+    # 当你修改脚本或 workflow 本身时触发调试
     paths:
       - 'strategy_c_sniper.py'
       - '.github/workflows/strategy_c_sniper.yml'
-  workflow_dispatch:
+  workflow_dispatch: # 支持手动点击按钮立即运行
 
 jobs:
   snipe:
     runs-on: ubuntu-latest
+    # 必须开启写入权限，否则无法更新 README.md
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -25,17 +28,31 @@ jobs:
           python-version: '3.9'
 
       - name: Install Base Libraries
-        run: pip install pandas numpy
+        run: |
+          pip install pandas numpy tabulate
 
-      - name: Run Sniper Script
+      - name: Run V6 Sniper & Generate README
         env:
           TZ: 'Asia/Shanghai'
         run: python strategy_c_sniper.py
 
-      - name: Commit and Push to Archive
+      - name: Commit and Push Updates
         run: |
           git config --local user.email "bot@github.com"
-          git config --local user.name "C-Strategy-Sniper"
-          git add "202*-*"/*.csv
-          git commit -m "Auto-Update C Strategy: $(date +'%Y-%m-%d %H:%M')" || exit 0
+          git config --local user.name "C-Strategy-Sniper-Bot"
+          
+          # 添加 README.md（实战和观察名单展示）
+          git add README.md
+          
+          # 添加归档 CSV 文件（如果有新生成的）
+          git add "backtest_reports/*/*.csv" || true
+          git add "Daily_Sniper_V5_*.csv" || true
+          
+          # 检查是否有内容需要提交，防止报错
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          
+          git commit -m "Auto-Update: V6 Sniper & Observer List ($(date +'%Y-%m-%d %H:%M'))"
           git push
