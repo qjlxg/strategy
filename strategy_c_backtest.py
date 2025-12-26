@@ -10,7 +10,7 @@ DATA_DIR = "stock_data"
 NAME_MAP_FILE = 'stock_names.csv'
 LOOKBACK_WINDOW = 120  
 HOLD_DAYS = 10         
-STOP_LOSS_PCT = -5.0   # 强制止损线下移至 -5%
+STOP_LOSS_PCT = -5.0   
 
 def calculate_indicators(df):
     close = df['Close']
@@ -34,6 +34,7 @@ def calculate_indicators(df):
     exp2 = close.ewm(span=26, adjust=False).mean()
     df['DIF'] = exp1 - exp2
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
+    df['MACD_HIST'] = (df['DIF'] - df['DEA']) * 2
     df['DIF_MA60'] = df['DIF'].rolling(60).mean()
     df['OBV'] = (np.sign(close.diff()) * df['Volume']).fillna(0).cumsum()
     return df
@@ -57,27 +58,31 @@ def run_backtest_on_file(file_path):
             curr = df.iloc[i]
             prev = df.iloc[i-1]
             
-            # C 策略核心逻辑 (保持原有核心算法不变 )
+            # --- 优化后的 C 策略核心逻辑 ---
             ma5_slope = np.polyfit(np.arange(5), df['MA5'].iloc[i-4:i+1].values, 1)[0]
             is_trend = (ma5_slope > 0) and (curr['Close'] > curr['MA20'])
             prev_high_40 = df['High'].iloc[i-40:i].max()
             is_breakout = (curr['Close'] > prev_high_40 * 1.01)
             is_vol = (2.0 * curr['MA5V'] < curr['Volume'] < 4.0 * curr['MA5V']) and (curr['MA3V'] >= curr['MA5V'])
-            is_rsi = (curr['RSI6'] > 60) and (curr['RSI6'] > prev['RSI6'])
+            
+            # 优化点：增强 RSI 过滤 (确保强度且未超买)
+            is_rsi = (65 < curr['RSI6'] < 85) and (curr['RSI6'] > prev['RSI6'])
+            
             is_kdj = (curr['K'] > curr['D']) and (prev['K'] <= prev['D']) and (curr['K'] < 70)
-            is_macd = (curr['DIF'] > curr['DEA']) and (curr['DIF'] > -0.05) and (curr['DIF'] > curr['DIF_MA60'])
+            
+            # 优化点：MACD 柱状图动能增强 (要求红柱增长)
+            is_macd = (curr['DIF'] > curr['DEA']) and (curr['DIF'] > -0.05) and \
+                      (curr['DIF'] > curr['DIF_MA60']) and (curr['MACD_HIST'] > prev['MACD_HIST'])
 
             if is_trend and is_breakout and is_vol and is_rsi and is_kdj and is_macd:
-                # 优化 1：买入机会筛选 - 过滤掉高开 >5% 的风险票 
+                # 优化：次日开盘买点过滤 (参考统计结论)
                 next_day = df.iloc[i+1]
                 open_jump = ((next_day['Open'] - curr['Close']) / curr['Close']) * 100
-                if open_jump > 5.0: continue 
+                if not (-1.5 < open_jump < 5.0): continue 
 
-                # 信号触发，开始追踪后续表现
                 post_df = df.iloc[i+1 : i+1+HOLD_DAYS]
                 if post_df.empty: continue
                 
-                # 优化 2：增加实时止损与动态利润监控
                 final_ret = 0.0
                 max_reach = 0.0
                 triggered_price = curr['Close']
@@ -87,7 +92,7 @@ def run_backtest_on_file(file_path):
                     day_high_reach = ((row['High'] - triggered_price) / triggered_price) * 100
                     max_reach = max(max_reach, day_high_reach)
                     
-                    # 检查止损：如果当日最低价跌破买入价 5%
+                    # 检查止损
                     day_low_ret = ((row['Low'] - triggered_price) / triggered_price) * 100
                     if day_low_ret <= STOP_LOSS_PCT:
                         final_ret = STOP_LOSS_PCT
@@ -116,21 +121,30 @@ def main():
     
     flattened = [item for sublist in all_results if sublist for item in sublist]
     if not flattened:
-        print("优化后回测期间未发现符合要求的信号。")
+        print("优化后回测期间未发现信号。")
         return
 
     res_df = pd.DataFrame(flattened)
     res_df['名称'] = res_df['代码'].apply(lambda x: names_dict.get(x, "未知"))
     
+    # 增加胜率统计计算
+    win_rate = (len(res_df[res_df['持有10日收益%'] > 0]) / len(res_df)) * 100
+    high_quality_rate = (len(res_df[res_df['最高冲击%'] > 10]) / len(res_df)) * 100
+    
     now = datetime.now()
     dir_name = "backtest_reports/" + now.strftime("%Y-%m")
     os.makedirs(dir_name, exist_ok=True)
-    save_path = os.path.join(dir_name, f"C_Strategy_Optimized_{now.strftime('%Y%m%d_%H%M')}.csv")
+    save_path = os.path.join(dir_name, f"C_Strategy_V3_{now.strftime('%Y%m%d_%H%M')}.csv")
     res_df.to_csv(save_path, index=False, encoding='utf-8-sig')
     
-    print(f"优化回测完成！剩余有效信号: {len(res_df)}")
+    print("-" * 30)
+    print(f"策略 V3 优化完成！")
+    print(f"信号总数: {len(res_df)}")
+    print(f"胜率 (10日收盘获胜): {win_rate:.2f}%")
+    print(f"高质量爆发率 (曾达10%): {high_quality_rate:.2f}%")
     print(f"平均最高冲击: {res_df['最高冲击%'].mean():.2f}%")
-    print(f"优化后平均收益: {res_df['持有10日收益%'].mean():.2f}%")
+    print(f"平均最终收益: {res_df['持有10日收益%'].mean():.2f}%")
+    print("-" * 30)
 
 if __name__ == "__main__":
     main()
