@@ -15,24 +15,21 @@ STOP_LOSS_PCT = -5.0
 def calculate_indicators(df):
     close = df['Close']
     df['MA5'] = close.rolling(5).mean()
-    df['MA10'] = close.rolling(10).mean() # 新增：用于多头排列校验
+    df['MA10'] = close.rolling(10).mean() 
     df['MA20'] = close.rolling(20).mean()
     df['MA5V'] = df['Volume'].rolling(5).mean()
     df['MA3V'] = df['Volume'].rolling(3).mean()
-    
     # RSI6
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(6).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(6).mean()
     df['RSI6'] = 100 - (100 / (1 + gain/loss))
-    
     # KDJ
     low_9 = df['Low'].rolling(9).min()
     high_9 = df['High'].rolling(9).max()
     rsv = (close - low_9) / (high_9 - low_9) * 100
     df['K'] = rsv.ewm(com=2).mean()
     df['D'] = df['K'].ewm(com=2).mean()
-    
     # MACD
     exp1 = close.ewm(span=12, adjust=False).mean()
     exp2 = close.ewm(span=26, adjust=False).mean()
@@ -61,24 +58,16 @@ def run_backtest_on_file(file_path):
             curr = df.iloc[i]
             prev = df.iloc[i-1]
             
-            # --- V5 强化版核心逻辑 ---
-            # 1. 趋势强化：增加 MA5 > MA10
+            # --- V5 核心逻辑 ---
             is_trend = (curr['MA5'] > curr['MA10'] > curr['MA20'])
-            
-            # 2. 突破确认：阳线突破前高
             prev_high_40 = df['High'].iloc[i-40:i].max()
             is_breakout = (curr['Close'] > prev_high_40 * 1.01) and (curr['Close'] > curr['Open'])
-            
-            # 3. 量能确认：成交量适度爆发
             is_vol = (2.0 * curr['MA5V'] < curr['Volume'] < 4.5 * curr['MA5V'])
-            
-            # 4. 指标共振：RSI处于攻击位，MACD红柱加速增长
             is_rsi = (65 < curr['RSI6'] < 82)
             is_kdj = (curr['K'] > curr['D']) and (prev['K'] <= prev['D'])
             is_macd = (curr['DIF'] > curr['DEA']) and (curr['MACD_HIST'] > prev['MACD_HIST'] * 1.1)
 
             if is_trend and is_breakout and is_vol and is_rsi and is_kdj and is_macd:
-                # 买点过滤
                 next_day = df.iloc[i+1]
                 open_jump = ((next_day['Open'] - curr['Close']) / curr['Close']) * 100
                 if not (-1.0 < open_jump < 4.5): continue 
@@ -86,23 +75,17 @@ def run_backtest_on_file(file_path):
                 post_df = df.iloc[i+1 : i+1+HOLD_DAYS]
                 if post_df.empty: continue
                 
-                final_ret = 0.0
-                max_reach = 0.0
+                final_ret, max_reach, is_stopped = 0.0, 0.0, False
                 triggered_price = curr['Close']
-                is_stopped = False
                 
                 for _, row in post_df.iterrows():
-                    # 计算持仓期间最高涨幅
                     day_high_reach = ((row['High'] - triggered_price) / triggered_price) * 100
                     max_reach = max(max_reach, day_high_reach)
-                    
-                    # 检查 5% 强制止损
                     day_low_ret = ((row['Low'] - triggered_price) / triggered_price) * 100
                     if day_low_ret <= STOP_LOSS_PCT:
                         final_ret = STOP_LOSS_PCT
                         is_stopped = True
                         break
-                    
                     final_ret = ((row['Close'] - triggered_price) / triggered_price) * 100
                 
                 results.append({
@@ -131,23 +114,29 @@ def main():
     res_df = pd.DataFrame(flattened)
     res_df['名称'] = res_df['代码'].apply(lambda x: names_dict.get(x, "未知"))
     
-    # --- 新增：统计计算 ---
+    # 统计计算
     total = len(res_df)
     wins = len(res_df[res_df['持有10日收益%'] > 0])
     win_rate = (wins / total) * 100 if total > 0 else 0
     avg_ret = res_df['持有10日收益%'].mean()
     
+    # --- 恢复目录推送逻辑 ---
     now = datetime.now()
-    save_path = f"C_Strategy_V5_Final_{now.strftime('%Y%m%d_%H%M')}.csv"
+    dir_name = "backtest_reports/" + now.strftime("%Y-%m")
+    if not os.path.exists(dir_name):
+        os.makedirs(dir_name)
+    
+    save_path = os.path.join(dir_name, f"C_Strategy_V5_Final_{now.strftime('%Y%m%d_%H%M')}.csv")
     res_df.to_csv(save_path, index=False, encoding='utf-8-sig')
     
-    print("\n" + "="*30)
+    print("\n" + "="*35)
     print(f"📊 策略 V5 最终版回测报告")
-    print(f"信号总数: {total}")
-    print(f"平均胜率: {win_rate:.2f}%")
-    print(f"平均净收益: {avg_ret:.2f}%")
-    print(f"报告已生成: {save_path}")
-    print("="*30 + "\n")
+    print("-" * 35)
+    print(f"📂 信号总数: {total}")
+    print(f"📈 最终胜率: {win_rate:.2f}%")
+    print(f"💰 平均收益: {avg_ret:.2f}%")
+    print(f"🚀 报告推送至: {save_path}")
+    print("="*35 + "\n")
 
 if __name__ == "__main__":
     main()
