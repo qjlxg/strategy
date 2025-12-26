@@ -6,111 +6,98 @@ import glob
 from multiprocessing import Pool, cpu_count
 import numpy as np
 
-# ==================== 2025“买入即获利”极简精选参数 ===================
-MIN_PRICE = 5.0              # 提高股价门槛，过滤低迷小票
-MAX_AVG_TURNOVER_30 = 2.5    # 换手率更低，意味着筹码锁定更好
+# ==================== 2025“防假突破”极致精选参数 ===================
+MIN_PRICE = 5.0              
+MAX_AVG_TURNOVER_30 = 2.0    # 强化：只要筹码稳定的标的
 
-# --- 极致缩量：锁定统计中胜率100%的区间 ---
-MIN_VOLUME_RATIO = 0.2       
-MAX_VOLUME_RATIO = 0.85      # 严格限制在0.85以下，只做缩量洗盘
+# --- 选股逻辑优化：避开僵尸股，允许微幅放量确认 ---
+MIN_VOLUME_RATIO = 0.5       # 避开完全无买盘的僵尸股
+MAX_VOLUME_RATIO = 1.2       # 允许小幅放量确认止跌
+RSI6_MAX = 28                # 严谨超跌区
+KDJ_K_MAX = 25               # 底部磨底确认
+MIN_PROFIT_POTENTIAL = 18    # 空间要求
 
-# --- 极度超跌：锁定V型反转高发区 ---
-RSI6_MAX = 25                # 锁定极致超跌区
-KDJ_K_MAX = 30               # 确保K值在底部磨底
-MIN_PROFIT_POTENTIAL = 15    # 要求反弹空间至少15%
+# --- 核心：确认信号强度 ---
+# 股价必须高于 5 日线 0.5%，且成交量必须大于昨天（量增价涨）
+STAND_STILL_THRESHOLD = 1.005 
+# 20日乖离率控制：锁定“弹簧压到极致”的区域
+MIN_BIAS_20 = -18
+MAX_BIAS_20 = -8
 
-# --- 形态与趋势控制 ---
-MAX_TODAY_CHANGE = 1.5       # 拒绝大阳线拉升后的追高，只选低位横盘或微涨
+MAX_TODAY_CHANGE = 4.0       # 允许适当涨幅以确认站上均线，但拒绝大阳线追高
 # =====================================================================
 
 SHANGHAI_TZ = pytz.timezone('Asia/Shanghai')
 STOCK_DATA_DIR = 'stock_data'
 NAME_MAP_FILE = 'stock_names.csv' 
 
-def calculate_indicators(df):
-    """计算核心指标"""
-    df = df.reset_index(drop=True)
-    close = df['收盘']
-    
-    # 1. RSI6
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=6).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=6).mean()
-    rs = gain / loss.replace(0, np.nan)
-    df['rsi6'] = 100 - (100 / (1 + rs))
-    
-    # 2. KDJ (9,3,3)
-    low_list = df['最低'].rolling(window=9).min()
-    high_list = df['最高'].rolling(window=9).max()
-    rsv = (df['收盘'] - low_list) / (high_list - low_list) * 100
-    df['kdj_k'] = rsv.ewm(com=2).mean()
-    
-    # 3. MA5 & MA60
-    df['ma5'] = close.rolling(window=5).mean()
-    df['ma60'] = close.rolling(window=60).mean()
-    
-    # 4. 换手率均值与量比
-    df['avg_turnover_30'] = df['换手率'].rolling(window=30).mean()
-    df['vol_ma5'] = df['成交量'].shift(1).rolling(window=5).mean()
-    df['vol_ratio'] = df['成交量'] / df['vol_ma5']
-    
-    return df
-
 def process_single_stock(args):
     file_path, name_map = args
-    stock_code = os.path.basename(file_path).split('.')[0]
-    stock_name = name_map.get(stock_code, "未知")
+    code = os.path.basename(file_path).split('.')[0]
     
-    # --- 自动剔除 ST 股 ---
-    if "ST" in stock_name.upper():
-        return None
-
     try:
-        df_raw = pd.read_csv(file_path)
-        if len(df_raw) < 60: return None
+        df = pd.read_csv(file_path)
+        if len(df) < 65: return None
         
-        df = calculate_indicators(df_raw)
-        latest = df.iloc[-1]
+        # 计算指标
+        close = df['收盘']
+        vol = df['成交量']
         
-        # 1. 基础门槛
-        if latest['收盘'] < MIN_PRICE or latest['avg_turnover_30'] > MAX_AVG_TURNOVER_30:
-            return None
+        # RSI6
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(6).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(6).mean()
+        rsi6 = 100 - (100 / (1 + (gain.iloc[-1] / loss.iloc[-1]))) if loss.iloc[-1] != 0 else 100
         
-        # 2. 空间与涨跌幅控制 (拒绝大涨，只要低吸)
-        potential = (latest['ma60'] - latest['收盘']) / latest['收盘'] * 100
-        change = latest['涨跌幅'] if '涨跌幅' in latest else 0
-        if potential < MIN_PROFIT_POTENTIAL or change > MAX_TODAY_CHANGE:
-            return None
+        # KDJ_K
+        low_9 = df['最低'].rolling(9).min()
+        high_9 = df['最高'].rolling(9).max()
+        kdj_k = ((close - low_9) / (high_9 - low_9) * 100).ewm(com=2).mean().iloc[-1]
         
-        # 3. 指标共振：极致超跌
-        if latest['rsi6'] > RSI6_MAX or latest['kdj_k'] > KDJ_K_MAX:
-            return None
+        # MA & BIAS
+        ma5 = close.rolling(5).mean().iloc[-1]
+        ma20 = close.rolling(20).mean().iloc[-1]
+        ma60 = close.rolling(60).mean().iloc[-1]
+        bias20 = (close.iloc[-1] - ma20) / ma20 * 100
         
-        # 4. 止跌确认：价格必须站在5日线之上（拒绝阴跌）
-        if latest['收盘'] < latest['ma5']:
-            return None
-            
-        # 5. 极致缩量确认
-        if not (MIN_VOLUME_RATIO <= latest['vol_ratio'] <= MAX_VOLUME_RATIO):
-            return None
+        # 量能确认
+        vol_ma5 = vol.shift(1).rolling(5).mean().iloc[-1]
+        vol_ratio = vol.iloc[-1] / vol_ma5
+        vol_increase = vol.iloc[-1] > vol.iloc[-2] # 今天的量大于昨天
+        
+        # 潜在反弹空间
+        potential = (ma60 - close.iloc[-1]) / close.iloc[-1] * 100
+        change = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2] * 100
+        avg_turnover_30 = df['换手率'].rolling(30).mean().iloc[-1]
 
-        return {
-            '代码': stock_code,
-            '名称': stock_name,
-            '最新日期': latest['日期'],
-            '现价': round(latest['收盘'], 2),
-            '今日量比': round(latest['vol_ratio'], 2),
-            'RSI6': round(latest['rsi6'], 1),
-            'K值': round(latest['kdj_k'], 1),
-            '距60日线空间': f"{round(potential, 1)}%",
-            '今日涨跌': f"{round(change, 1)}%"
-        }
+        # ================= 严格筛选条件 =================
+        if (close.iloc[-1] >= MIN_PRICE and
+            avg_turnover_30 <= MAX_AVG_TURNOVER_30 and
+            rsi6 <= RSI6_MAX and
+            kdj_k <= KDJ_K_MAX and
+            MIN_BIAS_20 <= bias20 <= MAX_BIAS_20 and
+            close.iloc[-1] >= ma5 * STAND_STILL_THRESHOLD and # 站稳确认
+            vol_increase and                                  # 量增确认
+            MIN_VOLUME_RATIO <= vol_ratio <= MAX_VOLUME_RATIO and
+            potential >= MIN_PROFIT_POTENTIAL and
+            change <= MAX_TODAY_CHANGE):
+
+            return {
+                '代码': code,
+                '名称': name_map.get(code, "未知"),
+                '现价': close.iloc[-1],
+                '今日量比': round(vol_ratio, 2),
+                'RSI6': round(rsi6, 1),
+                '20日乖离': f\"{round(bias20, 1)}%\",
+                '反弹空间': f\"{round(potential, 1)}%\",
+                '今日涨跌': f\"{round(change, 1)}%\"
+            }
     except:
         return None
 
 def main():
     now_shanghai = datetime.now(SHANGHAI_TZ)
-    print(f"🚀 极致缩量精选扫描开始... 目标：高胜率低吸")
+    print(f"🚀 极致缩量 + 防假突破扫描开始... 当前时间: {now_shanghai.strftime('%Y-%m-%d %H:%M')}")
 
     name_map = {}
     if os.path.exists(NAME_MAP_FILE):
@@ -127,22 +114,16 @@ def main():
         
     if results:
         df_result = pd.DataFrame(results)
-        # 排序：量比越小越优先（符合统计最高胜率逻辑）
         df_result = df_result.sort_values(by='今日量比', ascending=True)
         
-        print(f"\n🎯 经过【胜率看板】优化，仅筛选出 {len(results)} 只极品标的:")
-        print(df_result.to_string(index=False)) 
+        print(f"\n🎯 扫描完成，精选出 {len(results)} 只“站稳”标的：")
+        print(df_result.to_string(index=False))
         
-        date_str = now_shanghai.strftime('%Y%m%d_%H%M%S')
-        year_month = now_shanghai.strftime('%Y/%m')
-        save_path = f"results/{year_month}"
-        os.makedirs(save_path, exist_ok=True)
-        
-        file_name = f"极致精选_轮动_{date_str}.csv"
-        df_result.to_csv(os.path.join(save_path, file_name), index=False, encoding='utf_8_sig')
-        print(f"\n✅ 极精选报告已保存。")
+        # 存入结果
+        os.makedirs('results', exist_ok=True)
+        df_result.to_csv('results/selected_stocks.csv', index=False, encoding='utf_8_sig')
     else:
-        print("\n😱 暂无符合极致缩量且超跌止跌的标的，耐心等待是最高级的策略。")
+        print("\n🤔 市场暂未发现符合“防假突破”逻辑的极品信号。")
 
 if __name__ == "__main__":
     main()
