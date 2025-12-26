@@ -1,0 +1,40 @@
+name: Stock Scanner Backtest Workflow
+
+on:
+  workflow_dispatch: # 支持手动点击运行
+  push:
+    paths:
+      - 'stock_scanner_go.py'
+      - 'backtest_stock_scanner_go.py'
+      - '.github/workflows/backtest_stock_scanner_go.yml'
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: pip install pandas numpy pytz
+
+      - name: Execute Scanner and Backtest
+        env:
+          TZ: 'Asia/Shanghai' # 强制上海时区
+        run: |
+          mkdir -p results
+          python stock_scanner_go.py
+          python backtest_stock_scanner_go.py
+
+      - name: Push Results to Repository
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add results/*.csv
+          # 仅在有内容变化时提交，避免工作流报错
+          git diff --quiet && git diff --staged --quiet || (git commit -m "📊 自动更新扫描与回测报告 [$(date '+%Y-%m-%d %H:%M')]" && git push)
