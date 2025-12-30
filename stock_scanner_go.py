@@ -24,7 +24,7 @@ STAND_STILL_THRESHOLD = 1.005 # 必须站上5日线0.5%
 MIN_BIAS_20 = -18            # 20日乖离率下限（防暴雷）
 MAX_BIAS_20 = -8             # 20日乖离率上限（保动力）
 
-MAX_TODAY_CHANGE = 4.0       # 允许适度涨幅以确认站稳
+MAX_TODAY_CHANGE = 10.0       # 允许适度涨幅以确认站稳4.0
 # =====================================================================
 
 SHANGHAI_TZ = pytz.timezone('Asia/Shanghai')
